@@ -1,0 +1,128 @@
+package pjsdb_test
+
+import (
+	"bytes"
+	"context"
+	"math/rand"
+	"path/filepath"
+	"strconv"
+	"testing"
+
+	"github.com/laityjet/mammoth/v0/internal/pachhash"
+
+	"github.com/laityjet/mammoth/v0/internal/clusterstate"
+	"github.com/laityjet/mammoth/v0/internal/dockertestenv"
+	"github.com/laityjet/mammoth/v0/internal/migrations"
+	"github.com/laityjet/mammoth/v0/internal/pachsql"
+	"github.com/laityjet/mammoth/v0/internal/pctx"
+	"github.com/laityjet/mammoth/v0/internal/pjsdb"
+	"github.com/laityjet/mammoth/v0/internal/require"
+	"github.com/laityjet/mammoth/v0/internal/storage/chunk"
+	"github.com/laityjet/mammoth/v0/internal/storage/fileset"
+	"github.com/laityjet/mammoth/v0/internal/storage/kv"
+	"github.com/laityjet/mammoth/v0/internal/storage/track"
+	"github.com/laityjet/mammoth/v0/internal/testetcd"
+)
+
+type dependencies struct {
+	ctx context.Context
+	db  *pachsql.DB
+	tx  *pachsql.Tx
+	s   *fileset.Storage
+}
+
+func DB(t testing.TB) (context.Context, *pachsql.DB) {
+	t.Helper()
+	ctx := pctx.Child(pctx.TestContext(t), t.Name())
+	db := dockertestenv.NewTestDB(t)
+	migrationEnv := migrations.Env{EtcdClient: testetcd.NewEnv(ctx, t).EtcdClient}
+	require.NoError(t, migrations.ApplyMigrations(ctx, db, migrationEnv, clusterstate.DesiredClusterState), "should be able to set up tables")
+	return ctx, db
+}
+
+func FilesetStorage(t testing.TB, db *pachsql.DB) *fileset.Storage {
+	t.Helper()
+	store := kv.NewFSStore(filepath.Join(t.TempDir(), "obj-store"), 512, chunk.DefaultMaxChunkSize)
+	tr := track.NewPostgresTracker(db)
+	return fileset.NewStorage(fileset.NewPostgresStore(db), tr, chunk.NewStorage(store, nil, db, tr))
+}
+
+func withTx(t testing.TB, ctx context.Context, db *pachsql.DB, s *fileset.Storage, f func(d dependencies)) {
+	t.Helper()
+	tx, err := db.BeginTxx(ctx, nil)
+	require.NoError(t, err)
+	f(dependencies{ctx: ctx, db: db, tx: tx, s: s})
+	require.NoError(t, tx.Commit())
+}
+
+func withDependencies(t *testing.T, f func(d dependencies)) {
+	ctx, db := DB(t)
+	withTx(t, ctx, db, FilesetStorage(t, db), func(d dependencies) {
+		f(d)
+	})
+}
+
+func mockFileset(t testing.TB, d dependencies, path, value string) fileset.Pin {
+	var handle *fileset.Handle
+	uw, err := d.s.NewUnorderedWriter(d.ctx)
+	require.NoError(t, err)
+	err = uw.Put(d.ctx, path, "", true, bytes.NewReader([]byte(value)))
+	require.NoError(t, err)
+	handle, err = uw.Close(d.ctx)
+	require.NoError(t, err)
+	pin, err := d.s.PinTx(d.ctx, d.tx, handle)
+	require.NoError(t, err)
+	return pin
+}
+
+func mockAndHashFileset(t testing.TB, d dependencies, path, value string) (fileset.Pin, []byte) {
+	fs := mockFileset(t, d, path, value)
+	hasher := pachhash.New()
+	_, err := hasher.Write([]byte(path))
+	require.NoError(t, err)
+	_, err = hasher.Write([]byte(strconv.Itoa(len(path))))
+	require.NoError(t, err)
+	_, err = hasher.Write([]byte(value))
+	require.NoError(t, err)
+	hash := hasher.Sum(nil)
+	return fs, hash
+}
+
+func makeReq(t *testing.T, d dependencies, parent pjsdb.JobID, mutate func(req *pjsdb.CreateJobRequest)) pjsdb.CreateJobRequest {
+	program := `!#/bin/bash; ls /input/;`
+	programFileset, hash := mockAndHashFileset(t, d, "/program.py", program)
+	numInputs := rand.Intn(10) + 1
+	inputs := make([]fileset.Pin, 0)
+	inputHashes := make([][]byte, 0)
+	for i := 0; i < numInputs; i++ {
+		inputFileset, inputHash := mockAndHashFileset(t, d, "/input/"+strconv.Itoa(i)+".txt", `pachyderm`)
+		inputs = append(inputs, inputFileset)
+		inputHashes = append(inputHashes, inputHash)
+	}
+	createRequest := &pjsdb.CreateJobRequest{
+		Program:           programFileset,
+		ProgramHash:       hash,
+		Inputs:            inputs,
+		InputHashes:       inputHashes,
+		Parent:            parent,
+		CacheWriteEnabled: true,
+		CacheReadEnabled:  true,
+	}
+	if mutate != nil {
+		mutate(createRequest)
+	}
+	return *createRequest
+}
+
+func createJobWithFilesets(t testing.TB, d dependencies, parent pjsdb.JobID, program fileset.Pin,
+	targetHash []byte, inputs ...fileset.Pin) pjsdb.JobID {
+	createRequest := pjsdb.CreateJobRequest{
+		Program:     program,
+		ProgramHash: targetHash,
+		Inputs:      inputs,
+		Parent:      parent,
+	}
+	id, err := pjsdb.CreateJob(d.ctx, d.tx, createRequest)
+	require.NoError(t, err)
+	return id
+}

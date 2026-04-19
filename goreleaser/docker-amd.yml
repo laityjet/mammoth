@@ -1,138 +1,139 @@
+version: 2
+
 dist: ../dist-pach/docker
 
 builds:
-    - id: pachd
-      main: ./src/server/cmd/pachd
-      binary: pachd
-      env:
-          - CGO_ENABLED=0
-      ldflags:
-          - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
-            "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
-      goos:
-          - linux
-      goarch:
-          - amd64
-      gcflags:
-          - "all=-trimpath={{.Env.PWD}}"
-    - id: worker
-      main: ./src/server/cmd/worker
-      binary: worker
-      env:
-          - CGO_ENABLED=0
-      ldflags:
-          - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
-            "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
-      goos:
-          - linux
-      goarch:
-          - amd64
-      gcflags:
-          - "all=-trimpath={{.Env.PWD}}"
-    - id: worker_init
-      dir: etc/worker
-      main: init.go
-      binary: worker_init
-      env:
-          - CGO_ENABLED=0
-      ldflags:
-          - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
-            "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
-      goos:
-          - linux
-      goarch:
-          - amd64
-      gcflags:
-          - "all=-trimpath={{.Env.PWD}}"
-    - id: pachctl
-      main: ./src/server/cmd/pachctl
-      binary: pachctl
-      env:
-          - CGO_ENABLED=0
-      ldflags:
-          - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
-            "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
-      goos:
-          - linux
-      goarch:
-          - amd64
-      gcflags:
-          - "all=-trimpath={{.Env.PWD}}"
+  - id: pachd
+    main: ./src/server/cmd/pachd
+    binary: pachd
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
+        "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+    gcflags:
+      - "all=-trimpath={{.Env.PWD}}"
+  - id: worker
+    main: ./src/server/cmd/worker
+    binary: worker
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
+        "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+    gcflags:
+      - "all=-trimpath={{.Env.PWD}}"
+  - id: worker_init
+    dir: etc/worker
+    main: init.go
+    binary: worker_init
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
+        "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+    gcflags:
+      - "all=-trimpath={{.Env.PWD}}"
+  - id: pachctl
+    main: ./src/server/cmd/pachctl
+    binary: pachctl
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X {{ .Env.CLIENT_ADDITIONAL_VERSION }} -X
+        "github.com/pachyderm/pachyderm/v2/src/version.AppVersion={{ .Env.VERSION }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+    gcflags:
+      - "all=-trimpath={{.Env.PWD}}"
 
 archives:
-    - format: binary
-      builds:
-          - pachctl
+  - formats: binary
+    ids:
+      - pachctl
 
 checksum:
-    disable: true
+  disable: true
 
 changelog:
-    skip: true
+  disable: true
 
 release:
-    disable: true
+  disable: true
 
-dockers:
-    - image_templates:
-          - pachyderm/pachd
-          - pachyderm/pachd:local
-          - pachyderm/pachd-amd64
-          - pachyderm/pachd-amd64:local
-          - "pachyderm/pachd-amd64:{{ .Version }}"
-          - "pachyderm/pachd-amd64:{{ .FullCommit }}"
-      ids:
-          - pachd
-      goos: linux
-      goarch: amd64
-      skip_push: false
-      dockerfile: Dockerfile.pachd
-      extra_files:
-          - dex-assets
-          - LICENSE
-          - licenses
-      build_flag_templates:
-          - "--network=host"
-          - "--label=version={{.Version}}"
-          - "--label=release={{.Version}}"
-          - "--platform=linux/amd64"
-    - image_templates:
-          - pachyderm/pachctl-amd64
-          - pachyderm/pachctl-amd64:{{ .FullCommit }}
-      ids:
-          - pachctl
-      goos: linux
-      goarch: amd64
-      skip_push: false
-      dockerfile: Dockerfile.pachctl
-      build_flag_templates:
-          - "--network=host"
-          - "--progress=plain"
-          - "--label=version={{.Version}}"
-          - "--label=release={{.Version}}"
-          - "--platform=linux/amd64"
-      extra_files:
-          - LICENSE
-          - licenses
-    - image_templates:
-          - pachyderm/worker
-          - pachyderm/worker:local
-          - pachyderm/worker-amd64
-          - pachyderm/worker-amd64:local
-          - "pachyderm/worker-amd64:{{ .FullCommit }}"
-      ids:
-          - pachctl
-          - worker_init
-          - worker
-      goos: linux
-      goarch: amd64
-      skip_push: false
-      dockerfile: Dockerfile.worker
-      build_flag_templates:
-          - "--progress=plain"
-          - "--label=version={{.Version}}"
-          - "--label=release={{.Version}}"
-          - "--platform=linux/amd64"
-      extra_files:
-          - LICENSE
-          - licenses
+dockers_v2:
+  - id: pachd
+    ids: [pachd]
+    dockerfile: Dockerfile.pachd
+    images:
+      - pachyderm/pachd
+      - pachyderm/pachd-amd64
+    tags:
+      - local
+      - "{{ .Version }}"
+      - "{{ .FullCommit }}"
+    extra_files:
+      - dex-assets
+      - LICENSE
+      - licenses
+    platforms:
+      - linux/amd64
+    labels:
+      version: "{{.Version}}"
+      release: "{{.Version}}"
+    flags:
+      - "--network=host"
+      - "--platform=linux/amd64"
+  - id: pachctl
+    ids: [pachctl]
+    dockerfile: Dockerfile.pachctl
+    images:
+      - pachyderm/pachctl-amd64
+    tags:
+      - "{{ .FullCommit }}"
+    extra_files:
+      - LICENSE
+      - licenses
+    platforms:
+      - linux/amd64
+    labels:
+      version: "{{.Version}}"
+      release: "{{.Version}}"
+    flags:
+      - "--network=host"
+      - "--progress=plain"
+      - "--platform=linux/amd64"
+  - id: worker
+    ids: [pachctl, worker_init, worker]
+    dockerfile: Dockerfile.worker
+    images:
+      - pachyderm/worker
+      - pachyderm/worker-amd64
+    tags:
+      - local
+      - "{{ .FullCommit }}"
+    extra_files:
+      - LICENSE
+      - licenses
+    platforms:
+      - linux/amd64
+    labels:
+      version: "{{.Version}}"
+      release: "{{.Version}}"
+    flags:
+      - "--progress=plain"
+      - "--platform=linux/amd64"

@@ -1,0 +1,35 @@
+package setupenv
+
+import (
+	"context"
+	"time"
+
+	"github.com/dlmiddlecote/sqlstats"
+	"github.com/laityjet/mammoth/v0/internal/dbutil"
+	"github.com/laityjet/mammoth/v0/internal/errors"
+	"github.com/laityjet/mammoth/v0/internal/pachconfig"
+	"github.com/laityjet/mammoth/v0/internal/pachsql"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+func openDirectDB(ctx context.Context, config pachconfig.PostgresConfiguration) (*pachsql.DB, error) {
+	db, err := dbutil.NewDB(
+		ctx,
+		dbutil.WithHostPort(config.PostgresHost, config.PostgresPort),
+		dbutil.WithDBName(config.PostgresDBName),
+		dbutil.WithUserPassword(config.PostgresUser, config.PostgresPassword),
+		dbutil.WithMaxOpenConns(config.PostgresMaxOpenConns),
+		dbutil.WithMaxIdleConns(config.PostgresMaxIdleConns),
+		dbutil.WithConnMaxLifetime(time.Duration(config.PostgresConnMaxLifetimeSeconds)*time.Second),
+		dbutil.WithConnMaxIdleTime(time.Duration(config.PostgresConnMaxIdleSeconds)*time.Second),
+		dbutil.WithSSLMode(config.PostgresSSL),
+		dbutil.WithQueryLog(config.PostgresQueryLogging, "pgx.direct"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := prometheus.Register(sqlstats.NewStatsCollector("direct", db)); err != nil {
+		return nil, errors.Errorf("problem registering stats collector for direct db client: %w", err)
+	}
+	return db, nil
+}

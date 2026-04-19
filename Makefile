@@ -38,101 +38,101 @@ TIMEOUT ?= 3600s
 CLUSTERS_REUSE ?= true
 PARALLELISM ?= 3
 
-install:
+install: ## Install pachctl binary
 	# GOBIN (default: GOPATH/bin) must be on your PATH to access these binaries:
 	CGO_ENABLED=0 go install -ldflags "$(LD_FLAGS)" -gcflags "$(GC_FLAGS)" ./src/server/cmd/pachctl
 
-install-clean:
+install-clean: ## Clean install pachctl (remove old version first)
 	@# Need to blow away pachctl binary if its already there
 	@rm -f $(PACHCTL)
 	@make install
 
-install-doc:
+install-doc: ## Install pachctl-doc binary
 	go install -gcflags "$(GC_FLAGS)" ./src/server/cmd/pachctl-doc
 
-doc-custom: install-doc install-clean
+doc-custom: ## Build custom documentation
 	./etc/build/doc.sh
 
-doc-reference-refresh: install-doc install-clean
+doc-reference-refresh: ## Refresh API reference documentation
 	./etc/build/reference_refresh.sh
 
-doc:
+doc: ## Build documentation
 	@make VERSION_ADDITIONAL= doc-custom
 
-point-release:
+point-release: ## Create a point release
 	@./etc/build/make_changelog.sh $(CHLOGFILE)
 	@VERSION_ADDITIONAL= ./etc/build/make_release.sh
 	@echo "Release completed"
 
 # Run via 'make VERSION_ADDITIONAL=-rc2 release-candidate' to specify a version string
-release-candidate:
+release-candidate: ## Create a release candidate
 	@make custom-release
 
-custom-release:
+custom-release: ## Create a custom release
 	echo "" > $(CHLOGFILE)
 	@VERSION_ADDITIONAL=$(VERSION_ADDITIONAL) ./etc/build/make_release.sh "Custom"
 	# Need to check for homebrew updates from release-pachctl-custom
 
 # This is getting called from etc/build/make_release.sh
 # Git tag is force pushed. We are assuming if the same build is done again, it is done with intent
-release:
+release: ## Create a full release
 	@git tag -f -am "Release tag v$(VERSION)" v$(VERSION)
 	$(SKIP) @git push -f origin v$(VERSION)
 	@make release-helper
 	@make release-pachctl
 	@echo "Release $(VERSION) completed"
 
-release-helper: release-docker-images docker-push-release
+release-helper: release-docker-images docker-push-release ## Helper for release
 
-release-docker-images:
-	DOCKER_BUILDKIT=1 goreleaser release -p 1 $(GORELSNAP) $(GORELDEBUG) --skip-publish --clean -f goreleaser/docker.yml
+release-docker-images: ## Build docker images for release
+	DOCKER_BUILDKIT=1 goreleaser release -p 1 $(GORELSNAP) $(GORELDEBUG) --clean -f goreleaser/docker.yml
 
-release-pachctl:
+release-pachctl: ## Build pachctl for release
 	@goreleaser release -p 1 $(GORELSNAP) $(GORELDEBUG) --release-notes=$(CHLOGFILE) --clean -f goreleaser/pachctl.yml
 
-docker-build:
-	DOCKER_BUILDKIT=1 goreleaser release -p 1 $(GORELDEBUG) --skip-validate --skip-publish --clean -f goreleaser/docker.yml
+docker-build: ## Build docker images with goreleaser
+	DOCKER_BUILDKIT=1 goreleaser release -p 1 $(GORELDEBUG) --skip-validate --clean -f goreleaser/docker.yml
 
-docker-build-amd:
-	DOCKER_BUILDKIT=1 goreleaser release -p 1 --snapshot $(GORELDEBUG) --skip-publish --clean -f goreleaser/docker-amd.yml
+docker-build-amd: ## Build AMD docker images
+	DOCKER_BUILDKIT=1 goreleaser release -p 1 --snapshot $(GORELDEBUG) --clean -f goreleaser/docker-amd.yml
 
-docker-build-arm:
-	DOCKER_BUILDKIT=1 goreleaser release -p 1 --snapshot $(GORELDEBUG) --skip-publish --clean -f goreleaser/docker-arm.yml
+docker-build-arm: ## Build ARM docker images
+	DOCKER_BUILDKIT=1 goreleaser release -p 1 --snapshot $(GORELDEBUG) --clean -f goreleaser/docker-arm.yml
 
-docker-build-netcat:
+docker-build-netcat: ## Build netcat test image
 	docker build --network=host -f etc/test-images/Dockerfile.netcat -t pachyderm/ubuntuplusnetcat:local .
 
-docker-build-coverage:
+docker-build-coverage: ## Build coverage docker image
 	DOCKER_BUILDKIT=1 goreleaser release -p 1 --snapshot $(GORELDEBUG) --skip-publish --rm-dist -f goreleaser/docker-cover.yml
 
-docker-build-gpu:
+docker-build-gpu: ## Build GPU docker image
 	docker build $(DOCKER_BUILD_FLAGS) -t pachyderm_nvidia_driver_install etc/deploy/gpu
 	docker tag pachyderm_nvidia_driver_install pachyderm/nvidia_driver_install
 
-docker-push-gpu:
+docker-push-gpu: ## Push GPU docker image
 	$(SKIP) docker push pachyderm/nvidia_driver_install
 
-docker-push-gpu-dev:
+docker-push-gpu-dev: ## Push GPU docker image with dev tag
 	docker tag pachyderm/nvidia_driver_install pachyderm/nvidia_driver_install:`git rev-list HEAD --max-count=1`
 	$(SKIP) docker push pachyderm/nvidia_driver_install:`git rev-list HEAD --max-count=1`
 	echo pushed pachyderm/nvidia_driver_install:`git rev-list HEAD --max-count=1`
 
-docker-gpu: docker-build-gpu docker-push-gpu
+docker-gpu: docker-build-gpu docker-push-gpu ## Build and push GPU docker image
 
-docker-gpu-dev: docker-build-gpu docker-push-gpu-dev
+docker-gpu-dev: docker-build-gpu docker-push-gpu-dev ## Build and push GPU dev docker image
 
-docker-push:
+docker-push: ## Push docker images
 	$(SKIP) ./etc/build/push_docker_with_manifests.sh
 
-docker-pull:
+docker-pull: ## Pull docker images
 	$(SKIP) docker pull pachyderm/pachd:$(VERSION)
 	$(SKIP) docker pull pachyderm/worker:$(VERSION)
 	$(SKIP) docker pull pachyderm/pachctl:$(VERSION)
 
-docker-push-release: docker-push
+docker-push-release: docker-push ## Push release docker images
 	$(SKIP) docker push pachyderm/etcd:v3.5.1
 
-check-kubectl:
+check-kubectl: ## Check if kubectl is installed and context is valid
 	@# check that kubectl is installed
 	@which kubectl >/dev/null || { \
 		echo "error: kubectl not found"; \
@@ -143,10 +143,10 @@ check-kubectl:
 		exit 1; \
 	fi
 
-check-kubectl-connection:
+check-kubectl-connection: ## Check kubectl connection to cluster
 	kubectl $(KUBECTLFLAGS) get all > /dev/null
 
-launch-dev-vm: check-kubectl
+launch-dev-vm: check-kubectl ## Launch development VM with minikube
 	# Making sure minikube isn't still up from a previous run...
 	@if minikube ip 2>/dev/null || sudo minikube ip 2>/dev/null; \
 	then \
@@ -155,21 +155,21 @@ launch-dev-vm: check-kubectl
 	fi
 	etc/kube/start-minikube-vm.sh --cpus=$(MINIKUBE_CPU) --memory=$(MINIKUBE_MEM)
 
-clean-launch-kube:
+clean-launch-kube: ## Delete minikube cluster
 	@# clean up both of the following cases:
 	@# make launch-dev-vm - minikube config is owned by $USER
 	minikube ip 2>/dev/null && minikube delete || true
 	sudo minikube ip 2>/dev/null && sudo minikube delete || true
 	killall kubectl || true
 
-launch: install check-kubectl
+launch: install check-kubectl ## Launch Pachyderm locally
 	$(eval STARTTIME := $(shell date +%s))
 	helm install pachyderm etc/helm/pachyderm --set deployTarget=LOCAL
 	# wait for the pachyderm to come up
 	kubectl wait --for=condition=ready pod -l app=pachd --timeout=5m
 	@echo "pachd launch took $$(($$(date +%s) - $(STARTTIME))) seconds"
 
-launch-dev: check-kubectl check-kubectl-connection
+launch-dev: check-kubectl check-kubectl-connection ## Launch Pachyderm in development mode
 	$(eval STARTTIME := $(shell date +%s))
 	kubectl apply -f etc/testing/minio.yaml --namespace=default
 	helm install pachyderm etc/helm/pachyderm -f etc/helm/examples/local-dev-values.yaml
@@ -177,7 +177,7 @@ launch-dev: check-kubectl check-kubectl-connection
 	kubectl wait --for=condition=ready pod -l app=pachd --timeout=5m
 	@echo "pachd launch took $$(($$(date +%s) - $(STARTTIME))) seconds"
 
-launch-dev-determined: check-kubectl check-kubectl-connection
+launch-dev-determined: check-kubectl check-kubectl-connection ## Launch Pachyderm with Determined AI integration
 	$(eval STARTTIME := $(shell date +%s))
 	kubectl apply -f etc/testing/minio.yaml --namespace=default
 	helm install pachyderm etc/helm/pachyderm -f etc/helm/examples/local-dev-values-with-det.yaml --set pachd.image.tag=local --set determined.detVersion=latest --set pachd.enterpriseLicenseKey=$(ENT_ACT_CODE)
@@ -185,7 +185,7 @@ launch-dev-determined: check-kubectl check-kubectl-connection
 	kubectl wait --for=condition=ready pod -l app=pachd --timeout=5m
 	@echo "pachd launch took $$(($$(date +%s) - $(STARTTIME))) seconds"
 
-launch-enterprise: check-kubectl check-kubectl-connection
+launch-enterprise: check-kubectl check-kubectl-connection ## Launch Pachyderm Enterprise server
 	$(eval STARTTIME := $(shell date +%s))
 	kubectl create namespace enterprise --dry-run=true -o yaml | kubectl apply -f -
 	@if [[ -n $$CIRCLE_SHA1 ]]; then \
@@ -195,7 +195,7 @@ launch-enterprise: check-kubectl check-kubectl-connection
 	kubectl wait --for=condition=ready pod -l app=pach-enterprise --namespace enterprise --timeout=5m
 	@echo "pachd launch took $$(($$(date +%s) - $(STARTTIME))) seconds"
 
-launch-enterprise-member: check-kubectl check-kubectl-connection
+launch-enterprise-member: check-kubectl check-kubectl-connection ## Launch Enterprise member cluster
 	$(eval STARTTIME := $(shell date +%s))
 	kubectl apply -f etc/testing/minio.yaml --namespace=default
 	helm install pachyderm etc/helm/pachyderm -f etc/helm/examples/enterprise-member-values.yaml
@@ -203,7 +203,7 @@ launch-enterprise-member: check-kubectl check-kubectl-connection
 	kubectl wait --for=condition=ready pod -l app=pachd --timeout=5m
 	@echo "pachd launch took $$(($$(date +%s) - $(STARTTIME))) seconds"
 
-clean-launch: check-kubectl
+clean-launch: check-kubectl ## Clean up launched Pachyderm
 	helm delete pachyderm || true
 	helm delete enterprise || true
 	# These resources were not cleaned up by the old pachctl undeploy
@@ -217,14 +217,14 @@ clean-launch: check-kubectl
 	kubectl delete service -l app=minio -n default
 	kubectl delete pvc -l app=minio -n default
 
-proto: check-bazel
+proto: check-bazel ## Generate protobuf files
 	bazel run //:make_proto
 	$(MAKE) -C python-sdk proto
 
 # Run all the tests. Note! This is no longer the test entrypoint for travis
-test: clean-launch launch-dev lint enterprise-code-checkin-test docker-build test-cmds test-libs test-auth test-license test-enterprise test-worker test-admin test-pps
+test: clean-launch launch-dev lint enterprise-code-checkin-test docker-build test-cmds test-libs test-auth test-license test-enterprise test-worker test-admin test-pps ## Run all tests
 
-enterprise-code-checkin-test:
+enterprise-code-checkin-test: ## Check for Enterprise activation code in repo
 	@which ag || { printf "'ag' not found. Run:\n  sudo apt-get install -y silversearcher-ag\n  brew install the_silver_searcher\nto install it\n\n"; exit 1; }
 	# Check if our test activation code is anywhere in the repo
 	@echo "Files containing test Pachyderm Enterprise activation token:"; \
@@ -234,12 +234,12 @@ enterprise-code-checkin-test:
 	  false; \
 	fi
 
-test-pps: launch-stats
+test-pps: launch-stats ## Run PPS tests
 	@# Use the count flag to disable test caching for this test suite.
 	PROM_PORT=$$(kubectl --namespace=monitoring get svc/prometheus -o json | jq -r .spec.ports[0].nodePort) \
 	  go test -v -count=1 -tags=k8s ./src/server -parallel $(PARALLELISM) -timeout $(TIMEOUT) $(RUN) $(TESTFLAGS)
 
-test-cmds:
+test-cmds: ## Run command tests
 	go install -v ./src/testing/match
 	CGOENABLED=0 go test -v -count=1 -tags=k8s ./src/server/cmd/pachctl/cmd
 	go test -v -count=1 -tags=k8s ./src/server/pfs/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
@@ -248,96 +248,96 @@ test-cmds:
 	@# TODO(msteffen) does this test leave auth active? If so it must run last
 	go test -v -count=1 -tags=k8s ./src/server/auth/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
 	go test -v -count=1 -tags=k8s ./src/server/enterprise/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
-	go test -v -count=1 -tags=k8s ./src/server/identity/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
+	go test -v -count=1 -tags=k8s ./src/server/identity/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REuse) $(TESTFLAGS)
 	go test -v -count=1 -tags=k8s ./src/server/license/cmds -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
 
-test-testutils:
+test-testutils: ## Run test utilities tests
 	go install -v ./src/testing/match
 	go test -v -count=1 -tags k8s ./src/internal/testutil
 
-test-transaction:
+test-transaction: ## Run transaction tests
 	go test -count=1 -tags=k8s ./src/server/transaction/server/testing -timeout $(TIMEOUT) $(TESTFLAGS)
 
-test-client:
+test-client: ## Run client tests
 	go test -count=1 -tags=k8s -cover $$(go list ./src/client/...) $(TESTFLAGS)
 
-test-s3gateway-conformance:
+test-s3gateway-conformance: ## Run S3 gateway conformance tests
 	@if [ -z $$CONFORMANCE_SCRIPT_PATH ]; then \
 	  echo "Missing environment variable 'CONFORMANCE_SCRIPT_PATH'"; \
 	  exit 1; \
 	fi
 	$(CONFORMANCE_SCRIPT_PATH) --s3tests-config=etc/testing/s3gateway/s3tests.conf --ignore-config=etc/testing/s3gateway/ignore.conf --runs-dir=etc/testing/s3gateway/runs
 
-test-s3gateway-integration:
+test-s3gateway-integration: ## Run S3 gateway integration tests
 	@if [ -z $$INTEGRATION_SCRIPT_PATH ]; then \
 	  echo "Missing environment variable 'INTEGRATION_SCRIPT_PATH'"; \
 	  exit 1; \
 	fi
 	$(INTEGRATION_SCRIPT_PATH) http://localhost:30600 --access-key=none --secret-key=none
 
-test-s3gateway-unit:
+test-s3gateway-unit: ## Run S3 gateway unit tests
 	go test -v -count=1 -tags=k8s ./src/server/pfs/s3 -timeout $(TIMEOUT) $(TESTFLAGS)
 
-test-fuse:
+test-fuse: ## Run FUSE tests
 	CGOENABLED=0 go test -count=1 -tags=k8s -cover $$(go list ./src/server/... | grep '/src/server/pfs/fuse') $(TESTFLAGS)
 
-test-local:
+test-local: ## Run local tests (exclude FUSE)
 	CGOENABLED=0 go test -count=1 -tags=k8s -cover -short $$(go list ./src/server/... | grep -v '/src/server/pfs/fuse') -timeout $(TIMEOUT) $(TESTFLAGS)
 
-test-auth:
+test-auth: ## Run auth tests
 	go test -v -count=1 -tags=k8s ./src/server/auth/server/testing -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(RUN) $(TESTFLAGS)
 
-test-identity:
+test-identity: ## Run identity tests
 	etc/testing/forward-postgres.sh
 	go test -v -count=1 -tags=k8s ./src/server/identity/server -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(RUN) $(TESTFLAGS)
 
-test-license:
+test-license: ## Run license tests
 	go test -v -count=1 -tags=k8s ./src/server/license/server -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(RUN) $(TESTFLAGS)
 
-test-admin:
+test-admin: ## Run admin tests
 	go test -v -count=1 ./src/server/admin/server -timeout $(TIMEOUT) $(RUN) $(TESTFLAGS)
 
-test-enterprise:
+test-enterprise: ## Run Enterprise tests
 	go test -v -count=1 -tags=k8s ./src/server/enterprise/server -timeout $(TIMEOUT) -clusters.reuse $(CLUSTERS_REUSE) $(TESTFLAGS)
 
-test-enterprise-integration:
+test-enterprise-integration: ## Run Enterprise integration tests
 	go install ./src/testing/match
 	go test -v -count=1 -tags=k8s ./src/server/enterprise/testing -timeout $(TIMEOUT) $(TESTFLAGS)
 
-test-tls:
+test-tls: ## Run TLS tests
 	./etc/testing/test_tls.sh
 
-test-worker: launch-stats test-worker-helper
+test-worker: launch-stats test-worker-helper ## Run worker tests
 
-test-worker-helper:
+test-worker-helper: ## Helper for worker tests
 	PROM_PORT=$$(kubectl --namespace=monitoring get svc/prometheus -o json | jq -r .spec.ports[0].nodePort) \
 	  go test -v -count=1 -tags=k8s ./src/server/worker/ -timeout $(TIMEOUT) $(TESTFLAGS)
 
-clean: clean-launch clean-launch-kube
+clean: clean-launch clean-launch-kube ## Clean up everything
 
-clean-launch-stats:
+clean-launch-stats: ## Clean up Prometheus stats deployment
 	kubectl delete --filename etc/kubernetes-prometheus -R
 
-launch-stats:
+launch-stats: ## Launch Prometheus for stats collection
 	kubectl apply --filename etc/kubernetes-prometheus -R
 
-launch-loki:
+launch-loki: ## Launch Loki for logging
 	helm repo remove grafana || true
 	helm repo add grafana https://grafana.github.io/helm-charts
 	helm repo update
 	helm upgrade --install loki grafana/loki-stack
 	kubectl wait --for=condition=ready pod -l release=loki --timeout=5m
 
-clean-launch-loki:
+clean-launch-loki: ## Clean up Loki logging
 	helm uninstall loki
 
-logs: check-kubectl
+logs: check-kubectl ## Get logs from pachd pods
 	kubectl $(KUBECTLFLAGS) get pod -l app=pachd | sed '1d' | cut -f1 -d ' ' | xargs -n 1 -I pod sh -c 'echo pod && kubectl $(KUBECTLFLAGS) logs pod'
 
-follow-logs: check-kubectl
+follow-logs: check-kubectl ## Follow logs from pachd pods
 	kubectl $(KUBECTLFLAGS) get pod -l app=pachd | sed '1d' | cut -f1 -d ' ' | xargs -n 1 -I pod sh -c 'echo pod && kubectl $(KUBECTLFLAGS) logs -f pod'
 
-google-cluster:
+google-cluster: ## Create GKE cluster
 	gcloud container clusters create $(CLUSTER_NAME) --scopes storage-rw --machine-type $(CLUSTER_MACHINE_TYPE) --num-nodes $(CLUSTER_SIZE)
 	gcloud config set container/cluster $(CLUSTER_NAME)
 	gcloud container clusters get-credentials $(CLUSTER_NAME)
@@ -346,54 +346,59 @@ google-cluster:
 	gsutil mb gs://$(BUCKET_NAME) # for PFS
 	gcloud compute disks create --size=$(STORAGE_SIZE)GB $(STORAGE_NAME) # for PPS
 
-clean-google-cluster:
+clean-google-cluster: ## Delete GKE cluster
 	gcloud container clusters delete $(CLUSTER_NAME)
 	gcloud compute firewall-rules delete pachd
 	gsutil -m rm -r gs://$(BUCKET_NAME)
 	gcloud compute disks delete $(STORAGE_NAME)
 
-amazon-cluster:
+amazon-cluster: ## Create AWS cluster infrastructure
 	aws s3api create-bucket --bucket $(BUCKET_NAME) --region $(AWS_REGION)
 	aws ec2 create-volume --size $(STORAGE_SIZE) --region $(AWS_REGION) --availability-zone $(AWS_AVAILABILITY_ZONE) --volume-type gp2
 
-amazon-clean-cluster:
+amazon-clean-cluster: ## Clean up AWS cluster infrastructure
 	aws s3api delete-bucket --bucket $(BUCKET_NAME) --region $(AWS_REGION)
 	aws ec2 detach-volume --force --volume-id $(STORAGE_NAME)
 	sleep 20
 	aws ec2 delete-volume --volume-id $(STORAGE_NAME)
 
-amazon-clean-launch: clean-launch
+amazon-clean-launch: clean-launch ## Clean up Pachyderm on AWS
 	kubectl $(KUBECTLFLAGS) delete --ignore-not-found secrets amazon-secret
 
-amazon-clean:
+amazon-clean: ## Clean up everything on AWS
 	@while :; \
-        do if echo "The following script will delete your AWS bucket and volume. The action cannot be undone. Do you want to proceed? (Y/n)";read REPLY; then \
-        case $$REPLY in Y|y) make amazon-clean-launch;make amazon-clean-cluster;break;; \
+         do if echo "The following script will delete your AWS bucket and volume. The action cannot be undone. Do you want to proceed? (Y/n)";read REPLY; then \
+         case $$REPLY in Y|y) make amazon-clean-launch;make amazon-clean-cluster;break;; \
 	N|n) echo "The amazon clean process has been cancelled by user!";break;; \
 	*) echo "input parameter error, please input again ";continue;;esac; \
-        fi;done;
+         fi;done;
 
-microsoft-cluster:
+microsoft-cluster: ## Create Azure cluster infrastructure
 	azure group create --name $(AZURE_RESOURCE_GROUP) --location $(AZURE_LOCATION)
 	azure storage account create $(AZURE_STORAGE_NAME) --location $(AZURE_LOCATION) --resource-group $(AZURE_RESOURCE_GROUP) --sku-name LRS --kind Storage
 
-clean-microsoft-cluster:
+clean-microsoft-cluster: ## Clean up Azure cluster infrastructure
 	azure group delete $(AZURE_RESOURCE_GROUP) -q
 
-lint:
+lint: ## Run linter
 	etc/testing/lint.sh
 
-spellcheck:
+spellcheck: ## Check spelling in documentation
 	@mdspell doc/*.md doc/**/*.md *.md --en-us --ignore-numbers --ignore-acronyms --report --no-suggestions
 
-validate-circle:
+help: ## Show this help message
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@echo -e "\nAdditional environment variable documentation available at top of Makefile"
+
+validate-circle: ## Validate CircleCI configuration
 	circleci config validate .circleci/main.yml
 	circleci config validate .circleci/config.yml
 
-check-bazel:
+check-bazel: ## Check if Bazel is installed
 	@if ! command bazel >/dev/null; then echo "Bazel is required.  Install Bazelisk as bazel: https://github.com/bazelbuild/bazelisk#installation"; exit 1; fi;
 
 .PHONY: \
+	help \
 	install \
 	install-clean \
 	install-doc \

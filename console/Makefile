@@ -27,7 +27,7 @@ launch-prod:
 setup-auth:
 	npm run setupAuth:local
 
-setup-ci-auth: 
+setup-ci-auth:
 	npm run setupAuth
 
 install:
@@ -52,8 +52,7 @@ test:
 	npm test --prefix ./backend && npm test --prefix ./frontend
 
 circle-docker-build:
-	cd .. && docker buildx create --name hab --driver docker-container
-	cd .. && docker buildx build --provenance false --builder hab --platform linux/$(TARGET_ARCH) --build-arg DOCKER_TAG=$(CIRCLE_SHA1) --push -t pachyderm/haberdashery:$(CIRCLE_SHA1)-$(TARGET_ARCH) -f Dockerfile.console .
+	cd .. && docker buildx build --provenance false --builder hab --platform linux/$(TARGET_ARCH) --build-arg DOCKER_TAG=$(CIRCLE_SHA1) -t pachyderm/haberdashery:$(CIRCLE_SHA1)-$(TARGET_ARCH) -f Dockerfile.console .
 
 circle-docker-manifest:
 	docker manifest create pachyderm/haberdashery:$(CIRCLE_SHA1) docker.io/pachyderm/haberdashery:$(CIRCLE_SHA1)-amd64 docker.io/pachyderm/haberdashery:$(CIRCLE_SHA1)-arm64
@@ -61,9 +60,9 @@ circle-docker-manifest:
 
 e2e-ce: e2e
 
-e2e: 
+e2e:
 	npm run cypress:local
 
-e2e-auth: 
+e2e-auth:
 	npm run cypress:local-auth
-	
+

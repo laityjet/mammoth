@@ -1,0 +1,25 @@
+package dbutil
+
+import (
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgerrcode"
+
+	"github.com/laityjet/mammoth/v0/internal/errors"
+)
+
+// IsUniqueViolation returns true if the error is a UniqueContraintViolation
+func IsUniqueViolation(err error) bool {
+	pgErr := &pgconn.PgError{}
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == pgerrcode.UniqueViolation
+	}
+	return false
+}
+
+func IsNotNullViolation(err error, columnName string) bool {
+	pgErr := &pgconn.PgError{}
+	if errors.As(err, pgErr) {
+		return pgErr.Code == pgerrcode.NotNullViolation && pgErr.ColumnName == columnName
+	}
+	return false
+}

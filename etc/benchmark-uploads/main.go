@@ -32,7 +32,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/pachyderm/pachyderm/v2/src/client"
+	"github.com/laityjet/mammoth/v0/pkg/client"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/crypto/blake2b"

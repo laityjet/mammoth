@@ -1,0 +1,31 @@
+// Package fsutil provides a temporary file abstraction.
+//
+// TODO: currently only used in PFS command tests — can this be replaced with
+// t.TempDir?
+package fsutil
+
+import (
+	"os"
+
+	"github.com/laityjet/mammoth/v0/internal/errors"
+)
+
+func WithTmpFile(prefix string, cb func(*os.File) error, exts ...string) (retErr error) {
+	name := prefix + "-*"
+	for _, ext := range exts {
+		name += "." + ext
+	}
+	f, err := os.CreateTemp(os.TempDir(), name)
+	if err != nil {
+		return errors.EnsureStack(err)
+	}
+	defer func() {
+		if err := os.Remove(f.Name()); retErr == nil {
+			retErr = errors.EnsureStack(err)
+		}
+		if err := f.Close(); retErr == nil {
+			retErr = errors.EnsureStack(err)
+		}
+	}()
+	return cb(f)
+}

@@ -1,0 +1,290 @@
+package pachd
+
+import (
+	"context"
+	"net"
+	godebug "runtime/debug"
+
+	"github.com/laityjet/mammoth/v0/internal/auth"
+	"github.com/laityjet/mammoth/v0/internal/clusterstate"
+	"github.com/laityjet/mammoth/v0/internal/dbutil"
+	"github.com/laityjet/mammoth/v0/internal/errors"
+	"github.com/laityjet/mammoth/v0/internal/log"
+	auth_interceptor "github.com/laityjet/mammoth/v0/internal/middleware/auth"
+	errorsmw "github.com/laityjet/mammoth/v0/internal/middleware/errors"
+	log_interceptor "github.com/laityjet/mammoth/v0/internal/middleware/logging"
+	"github.com/laityjet/mammoth/v0/internal/middleware/recovery"
+	"github.com/laityjet/mammoth/v0/internal/middleware/validation"
+	version_middleware "github.com/laityjet/mammoth/v0/internal/middleware/version"
+	"github.com/laityjet/mammoth/v0/internal/migrations"
+	"github.com/laityjet/mammoth/v0/internal/pachconfig"
+	"github.com/laityjet/mammoth/v0/internal/pachsql"
+	pjs_server "github.com/laityjet/mammoth/v0/internal/pjs"
+	"github.com/laityjet/mammoth/v0/internal/profileutil"
+	"github.com/laityjet/mammoth/v0/internal/storage"
+	"github.com/laityjet/mammoth/v0/internal/tracing"
+	"github.com/laityjet/mammoth/v0/internal/metadata"
+	"github.com/laityjet/mammoth/v0/internal/pfs"
+	"github.com/laityjet/mammoth/v0/internal/pjs"
+	"github.com/laityjet/mammoth/v0/internal/pps"
+	authserver "github.com/laityjet/mammoth/v0/internal/server/auth/server"
+	metadata_server "github.com/laityjet/mammoth/v0/internal/server/metadata/server"
+	pfs_server "github.com/laityjet/mammoth/v0/internal/server/pfs/server"
+	pps_server "github.com/laityjet/mammoth/v0/internal/server/pps/server"
+	txn_server "github.com/laityjet/mammoth/v0/internal/server/transaction/server"
+	"github.com/laityjet/mammoth/v0/internal/transaction"
+	"github.com/laityjet/mammoth/v0/internal/version"
+	etcd "go.etcd.io/etcd/client/v3"
+	"go.uber.org/automaxprocs/maxprocs"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+func printVersion() setupStep {
+	return setupStep{
+		Name: "printVersion",
+		Fn: func(ctx context.Context) error {
+			log.Info(ctx, "version info", log.Proto("versionInfo", version.Version))
+			return nil
+		},
+	}
+}
+
+func tweakResources(config pachconfig.GlobalConfiguration) setupStep {
+	return setupStep{
+		Name: "tweakResources",
+		Fn: func(ctx context.Context) error {
+			// set GOMAXPROCS to the container limit & log outcome to stdout
+			maxprocs.Set(maxprocs.Logger(zap.S().Named("maxprocs").Infof)) //nolint:errcheck
+			godebug.SetGCPercent(config.GCPercent)
+			log.Info(ctx, "gc: set gc percent", zap.Int("value", config.GCPercent))
+			setupMemoryLimit(ctx, config)
+			return nil
+		},
+	}
+}
+
+func setupProfiling(name string, config *pachconfig.Configuration) setupStep {
+	return setupStep{
+		Name: "setupProfiling",
+		Fn: func(ctx context.Context) error {
+			profileutil.StartCloudProfiler(ctx, name, config)
+			return nil
+		},
+	}
+}
+
+func initJaeger() setupStep {
+	return setupStep{
+		Name: "initJaegar",
+		Fn: func(ctx context.Context) error {
+			// must run InstallJaegerTracer before InitWithKube (otherwise InitWithKube
+			// may create a pach client before tracing is active, not install the Jaeger
+			// gRPC interceptor in the client, and not propagate traces)
+			if endpoint := tracing.InstallJaegerTracerFromEnv(); endpoint != "" {
+				log.Info(ctx, "connecting to Jaeger", zap.String("endpoint", endpoint))
+			} else {
+				log.Info(ctx, "no Jaeger collector found (JAEGER_COLLECTOR_SERVICE_HOST not set)")
+			}
+			return nil
+		},
+	}
+}
+
+func awaitDB(db *pachsql.DB) setupStep {
+	return setupStep{
+		Name: "awaitDB",
+		Fn: func(ctx context.Context) error {
+			return dbutil.WaitUntilReady(ctx, db)
+		},
+	}
+}
+
+func awaitMigrations(db *pachsql.DB, state migrations.State) setupStep {
+	return setupStep{
+		Name: "awaitMigrations",
+		Fn: func(ctx context.Context) error {
+			return migrations.BlockUntil(ctx, db, state)
+		},
+	}
+}
+
+func runMigrations(db *pachsql.DB, etcdClient *etcd.Client, state *migrations.State) setupStep {
+	s := clusterstate.DesiredClusterState
+	if state != nil {
+		s = *state
+	}
+	return setupStep{
+		Name: "runMigrations",
+		Fn: func(ctx context.Context) error {
+			env := migrations.MakeEnv(etcdClient)
+			return migrations.ApplyMigrations(ctx, db, env, s)
+		},
+	}
+}
+
+func newSelfGRPC(l net.Listener, opts []grpc.DialOption) *grpc.ClientConn {
+	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	gc, err := grpc.Dial(l.Addr().String(), opts...) //nolint:SA1019
+	if err != nil {
+		// This is always a configuration issue, Dial does not initiate a network connection before returning.
+		panic(err)
+	}
+	return gc
+}
+
+func initTransactionServer(out *transaction.APIServer, env func() txn_server.Env) setupStep {
+	return setupStep{
+		Name: "initTransactionServer",
+		Fn: func(ctx context.Context) error {
+			s, err := txn_server.NewAPIServer(env())
+			if err != nil {
+				return err
+			}
+			*out = s
+			return nil
+		},
+	}
+}
+
+func initPFSAPIServer(out *pfs.APIServer, outMaster **pfs_server.Master, env func() pfs_server.Env) setupStep {
+	return setupStep{
+		Name: "initPFSAPIServer",
+		Fn: func(ctx context.Context) error {
+			apiServer, err := pfs_server.NewAPIServer(ctx, env())
+			if err != nil {
+				return errors.Wrap(err, "pfs api server")
+			}
+			*out = apiServer
+			master, err := pfs_server.NewMaster(ctx, env())
+			if err != nil {
+				return errors.Wrap(err, "pfs master")
+			}
+			*outMaster = master
+			return nil
+		},
+	}
+}
+
+func initPJSAPIServer(out *pjs.APIServer, env func() pjs_server.Env) setupStep {
+	return setupStep{
+		Name: "initPFSAPIServer",
+		Fn: func(ctx context.Context) error {
+			apiServer := pjs_server.NewAPIServer(env())
+			*out = apiServer
+			return nil
+		},
+	}
+}
+
+func initStorageServer(out **storage.Server, env func() storage.Env) setupStep {
+	return setupStep{
+		Name: "initStorageServer",
+		Fn: func(ctx context.Context) error {
+			s, err := storage.New(ctx, env())
+			if err != nil {
+				return err
+			}
+			*out = s
+			return nil
+		},
+	}
+}
+
+func initPPSAPIServer(out *pps.APIServer, env func() pps_server.Env) setupStep {
+	return setupStep{
+		Name: "initPPSServer",
+		Fn: func(ctx context.Context) error {
+			s, err := pps_server.NewAPIServer(env())
+			if err != nil {
+				return err
+			}
+			*out = s
+			return nil
+		},
+	}
+}
+
+func initPFSWorker(out **pfs_server.Worker, config pachconfig.StorageConfiguration, env func() pfs_server.WorkerEnv) setupStep {
+	return setupStep{
+		Name: "initPFSWorker",
+		Fn: func(ctx context.Context) error {
+			w, err := pfs_server.NewWorker(ctx, env(), pfs_server.WorkerConfig{Storage: config})
+			if err != nil {
+				return err
+			}
+			*out = w
+			return nil
+		},
+	}
+}
+
+func initAuthServer(out *auth.APIServer, env func() authserver.Env) setupStep {
+	return setupStep{
+		Name: "initAuthServer",
+		Fn: func(ctx context.Context) error {
+			apiServer, err := authserver.NewAuthServer(
+				env(),
+				false, false, true,
+			)
+			if err != nil {
+				return err
+			}
+			*out = apiServer
+			return nil
+		},
+	}
+}
+
+func initMetadataServer(out *metadata.APIServer, env func() metadata_server.Env) setupStep {
+	return setupStep{
+		Name: "initMetadataServer",
+		Fn: func(ctx context.Context) error {
+			server := metadata_server.NewMetadataServer(env())
+			*out = server
+			return nil
+		},
+	}
+}
+
+// newServeGRPC returns a background runner which servers gRPC on l.
+// reg is called to register functions with the server.
+func newServeGRPC(authInterceptor *auth_interceptor.Interceptor, l net.Listener, reg func(gs grpc.ServiceRegistrar)) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		baseContextInterceptor := log_interceptor.NewBaseContextInterceptor(ctx)
+		loggingInterceptor := log_interceptor.NewLoggingInterceptor(ctx)
+		loggingInterceptor.Level = log.DebugLevel
+		gs := grpc.NewServer(
+			grpc.ChainUnaryInterceptor(
+				baseContextInterceptor.UnaryServerInterceptor,
+				loggingInterceptor.UnarySetup,
+				errorsmw.UnaryServerInterceptor,
+				version_middleware.UnaryServerInterceptor,
+				tracing.UnaryServerInterceptor(),
+				authInterceptor.InterceptUnary,
+				loggingInterceptor.UnaryAnnounce,
+				validation.UnaryServerInterceptor,
+				recovery.UnaryServerInterceptor,
+			),
+			grpc.ChainStreamInterceptor(
+				baseContextInterceptor.StreamServerInterceptor,
+				loggingInterceptor.StreamSetup,
+				errorsmw.StreamServerInterceptor,
+				version_middleware.StreamServerInterceptor,
+				tracing.StreamServerInterceptor(),
+				authInterceptor.InterceptStream,
+				loggingInterceptor.StreamAnnounce,
+				validation.StreamServerInterceptor,
+				recovery.StreamServerInterceptor,
+			),
+		)
+		reg(gs)
+		go func() {
+			<-ctx.Done()
+			log.Info(ctx, "stopping grpc server")
+			gs.Stop()
+		}()
+		return errors.EnsureStack(gs.Serve(l))
+	}
+}

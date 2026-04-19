@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pachyderm/pachyderm/v2/src/client"
-	"github.com/pachyderm/pachyderm/v2/src/pfs"
-	"github.com/pachyderm/pachyderm/v2/src/pps"
+	"github.com/laityjet/mammoth/v0/pkg/client"
+	"github.com/laityjet/mammoth/v0/internal/pfs"
+	"github.com/laityjet/mammoth/v0/internal/pps"
 	//	"os"
 )
 

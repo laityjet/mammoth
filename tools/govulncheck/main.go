@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pachyderm/pachyderm/v2/src/testing/govulncheck"
+	"github.com/laityjet/mammoth/v0/internal/testing/govulncheck"
 	"golang.org/x/vuln/scan"
 )
 

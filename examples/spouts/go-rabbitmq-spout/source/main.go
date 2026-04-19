@@ -13,7 +13,7 @@ import (
 
 	"github.com/streadway/amqp"
 
-	client "github.com/pachyderm/pachyderm/v2/src/client"
+	client "github.com/laityjet/mammoth/v0/pkg/client"
 )
 
 const defaultPrefetch = 500

@@ -10,9 +10,10 @@ MAINTAINER support@pachyderm.io
 LABEL name="Pachyderm" \
       vendor="Pachyderm"
 
+ARG TARGETPLATFORM
 COPY LICENSE /LICENSE
 COPY licenses /licenses
-COPY pachd /pachd
+COPY $TARGETPLATFORM/pachd /pachd
 COPY dex-assets /dex-assets
 COPY --from=pachyderm_build /tmp/to-copy /
 COPY --from=pachyderm_build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

@@ -1,3 +1,5 @@
+version: 2
+
 project_name: pachctl
 
 dist: ../dist-pach/pachctl
@@ -27,11 +29,11 @@ builds:
 
 archives:
     - id: pachctl-archives
-      builds:
+      ids:
           - pachctl
       format_overrides:
-          - goos: darwin
-            format: zip
+           - goos: darwin
+             formats: zip
       wrap_in_directory: true
       files:
           - pachctl*/pachctl
@@ -40,16 +42,16 @@ checksum:
     disable: true
 
 snapshot:
-    name_template: "{{ .Env.VERSION }}"
+    version_template: "{{ .Env.VERSION }}"
 
 changelog:
-    skip: false
+    disable: false
 
 nfpms:
     - id: pachctl-deb
       package_name: pachctl
       file_name_template: "{{ .ProjectName }}_{{ .Env.VERSION }}_{{ .Arch }}"
-      builds:
+      ids:
           - pachctl
       replacements:
           linux: ""

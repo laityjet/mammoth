@@ -1,0 +1,199 @@
+package serviceenv
+
+import (
+	"context"
+	pjs_server "github.com/laityjet/mammoth/v0/internal/pjs"
+
+	"github.com/laityjet/mammoth/v0/internal/identity"
+	"github.com/laityjet/mammoth/v0/internal/client"
+	col "github.com/laityjet/mammoth/v0/internal/collection"
+	"github.com/laityjet/mammoth/v0/internal/errors"
+	"github.com/laityjet/mammoth/v0/internal/pachconfig"
+	"github.com/laityjet/mammoth/v0/internal/pachsql"
+	"github.com/laityjet/mammoth/v0/internal/task"
+	auth_server "github.com/laityjet/mammoth/v0/internal/server/auth"
+	enterprise_server "github.com/laityjet/mammoth/v0/internal/server/enterprise"
+	pfs_server "github.com/laityjet/mammoth/v0/internal/server/pfs"
+	pps_server "github.com/laityjet/mammoth/v0/internal/server/pps"
+
+	dex_storage "github.com/dexidp/dex/storage"
+	loki "github.com/laityjet/mammoth/v0/internal/lokiutil/client"
+	etcd "go.etcd.io/etcd/client/v3"
+	"golang.org/x/sync/errgroup"
+	"k8s.io/client-go/dynamic"
+	kube "k8s.io/client-go/kubernetes"
+)
+
+// TestServiceEnv is a simple implementation of ServiceEnv that can be constructed with
+// existing clients.
+type TestServiceEnv struct {
+	Configuration            *pachconfig.Configuration
+	PachClient               *client.APIClient
+	EtcdClient               *etcd.Client
+	KubeClient               kube.Interface
+	DynamicKubeClient        dynamic.Interface
+	LokiClient               *loki.Client
+	DBClient, DirectDBClient *pachsql.DB
+	PostgresListener         col.PostgresListener
+	DexDB                    dex_storage.Storage
+	Ctx                      context.Context
+
+	// Auth is the registered auth APIServer
+	Auth auth_server.APIServer
+
+	// Identity is the registered auth APIServer
+	Identity identity.APIServer
+
+	// Pps is the registered pps APIServer
+	Pps pps_server.APIServer
+
+	// Pfs is the registered pfs APIServer
+	Pfs pfs_server.APIServer
+
+	// Pjs is the registered pjs APIServer
+	Pjs pjs_server.APIServer
+
+	// Enterprise is the registered pfs APIServer
+	Enterprise enterprise_server.APIServer
+
+	// Ready is a channel that blocks `GetPachClient` until it's closed.
+	// This avoids a race when we need to instantiate the server before
+	// getting a client pointing at the same server.
+	Ready chan interface{}
+}
+
+func (s *TestServiceEnv) Config() *pachconfig.Configuration {
+	return s.Configuration
+}
+
+func (s *TestServiceEnv) GetPachClient(ctx context.Context) *client.APIClient {
+	<-s.Ready
+	return s.PachClient.WithCtx(ctx)
+}
+func (s *TestServiceEnv) GetEtcdClient() *etcd.Client {
+	return s.EtcdClient
+}
+func (s *TestServiceEnv) GetTaskService(prefix string) task.Service {
+	return task.NewEtcdService(s.EtcdClient, prefix)
+}
+func (s *TestServiceEnv) GetKubeClient() kube.Interface {
+	return s.KubeClient
+}
+func (s *TestServiceEnv) GetDynamicKubeClient() dynamic.Interface {
+	return s.DynamicKubeClient
+}
+func (s *TestServiceEnv) GetLokiClient() (*loki.Client, error) {
+	return s.LokiClient, nil
+}
+func (s *TestServiceEnv) GetDBClient() *pachsql.DB {
+	return s.DBClient
+}
+func (s *TestServiceEnv) GetDirectDBClient() *pachsql.DB {
+	return s.DirectDBClient
+}
+func (s *TestServiceEnv) GetPostgresListener() col.PostgresListener {
+	return s.PostgresListener
+}
+
+func (s *TestServiceEnv) Context() context.Context {
+	return s.Ctx
+}
+
+func (s *TestServiceEnv) ClusterID() string {
+	return "testing"
+}
+
+func (s *TestServiceEnv) GetDexDB() dex_storage.Storage {
+	return s.DexDB
+}
+
+func (s *TestServiceEnv) Close() error {
+	eg := &errgroup.Group{}
+	if client := s.GetPachClient(context.Background()); client != nil {
+		eg.Go(client.Close)
+	}
+	if client := s.GetEtcdClient(); client != nil {
+		eg.Go(client.Close)
+	}
+	if client := s.GetDBClient(); client != nil {
+		eg.Go(client.Close)
+	}
+	if client := s.GetDexDB(); client != nil {
+		eg.Go(client.Close)
+	}
+	if listener := s.GetPostgresListener(); listener != nil {
+		eg.Go(listener.Close)
+	}
+	return errors.EnsureStack(eg.Wait())
+}
+
+// AuthServer returns the registered Auth APIServer
+func (env *TestServiceEnv) AuthServer() auth_server.APIServer {
+	return env.Auth
+}
+
+// IdentityServer returns the registered Identity APIServer
+func (env *TestServiceEnv) IdentityServer() identity.APIServer {
+	return env.Identity
+}
+
+// PpsServer returns the registered PPS APIServer
+func (env *TestServiceEnv) PpsServer() pps_server.APIServer {
+	return env.Pps
+}
+
+// PfsServer returns the registered PFS APIServer
+func (env *TestServiceEnv) PfsServer() pfs_server.APIServer {
+	return env.Pfs
+}
+
+// PjsServer returns the registered PJS APIServer
+func (env *TestServiceEnv) PjsServer() pjs_server.APIServer { return env.Pjs }
+
+// SetAuthServer returns the registered Auth APIServer
+func (env *TestServiceEnv) SetAuthServer(s auth_server.APIServer) {
+	env.Auth = s
+}
+
+// SetIdentityServer returns the registered Identity APIServer
+func (env *TestServiceEnv) SetIdentityServer(s identity.APIServer) {
+	env.Identity = s
+}
+
+// SetPpsServer returns the registered PPS APIServer
+func (env *TestServiceEnv) SetPpsServer(s pps_server.APIServer) {
+	env.Pps = s
+}
+
+// SetPfsServer returns the registered PFS APIServer
+func (env *TestServiceEnv) SetPfsServer(s pfs_server.APIServer) {
+	env.Pfs = s
+}
+
+// SetPjsServer registers a Pjs APIServer with this service env
+func (env *TestServiceEnv) SetPjsServer(s pjs_server.APIServer) {
+	env.Pjs = s
+}
+
+// EnterpriseServer returns the registered Enterprise APIServer
+func (env *TestServiceEnv) EnterpriseServer() enterprise_server.APIServer {
+	return env.Enterprise
+}
+
+// SetEnterpriseServer returns the registered Enterprise APIServer
+func (env *TestServiceEnv) SetEnterpriseServer(s enterprise_server.APIServer) {
+	env.Enterprise = s
+}
+
+// SetKubeClient can be used to override the kubeclient in testing.
+func (env *TestServiceEnv) SetKubeClient(s kube.Interface) {
+	env.KubeClient = s
+}
+
+// SetDynamicKubeClient can be used to override the dynamic kubeclient in testing.
+func (env *TestServiceEnv) SetDynamicKubeClient(s dynamic.Interface) {
+	env.DynamicKubeClient = s
+}
+
+// InitDexDB implements the ServiceEnv interface.
+func (end *TestServiceEnv) InitDexDB() {}

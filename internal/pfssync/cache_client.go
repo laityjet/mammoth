@@ -1,0 +1,135 @@
+package pfssync
+
+import (
+	io "io"
+	"sync"
+
+	"github.com/hashicorp/golang-lru/v2/simplelru"
+	"github.com/laityjet/mammoth/v0/internal/client"
+	"github.com/laityjet/mammoth/v0/internal/errors"
+	"github.com/laityjet/mammoth/v0/internal/pfsdb"
+	"github.com/laityjet/mammoth/v0/internal/storage/renew"
+	"github.com/laityjet/mammoth/v0/internal/pfs"
+)
+
+type CacheClient struct {
+	*client.APIClient
+	mu      sync.Mutex
+	cache   *simplelru.LRU[string, *pfs.Commit]
+	renewer *renew.StringSet
+}
+
+// NewCacheClient is not properly documented.
+//
+//   - TODO: Expose configuration for cache size?
+//   - TODO: Dedupe work?
+//   - TODO: Document.
+func NewCacheClient(pachClient *client.APIClient, renewer *renew.StringSet) *CacheClient {
+	cc := &CacheClient{
+		APIClient: pachClient,
+		renewer:   renewer,
+	}
+	cache, err := simplelru.NewLRU[string, *pfs.Commit](10, nil)
+	if err != nil {
+		// lru.NewWithEvict only errors for size < 1
+		panic(err)
+	}
+	cc.cache = cache
+	return cc
+}
+
+func (cc *CacheClient) GetFileset(commit *pfs.Commit) (string, error) {
+	key := pfsdb.CommitKey(commit)
+	if c, ok := cc.get(key); ok {
+		return c.Id, nil
+	}
+	branch := ""
+	if commit.Branch != nil {
+		branch = commit.Branch.Name
+	}
+	id, err := cc.APIClient.GetFileSet(commit.Repo.Project.GetName(), commit.Repo.Name, branch, commit.Id)
+	if err != nil {
+		return "", err
+	}
+	if err := cc.renewer.Add(cc.APIClient.Ctx(), id); err != nil {
+		return "", err
+	}
+	commit = client.NewCommit(commit.Repo.Project.GetName(), client.FileSetsRepoName, "", id)
+	cc.put(key, commit)
+	return id, nil
+}
+
+func (cc *CacheClient) GetFileTAR(commit *pfs.Commit, path string) (io.ReadCloser, error) {
+	key := pfsdb.CommitKey(commit)
+	if c, ok := cc.get(key); ok {
+		return cc.APIClient.GetFileTAR(c, path)
+	}
+	branch := ""
+	if commit.Branch != nil {
+		branch = commit.Branch.Name
+	}
+	id, err := cc.APIClient.GetFileSet(commit.Repo.Project.GetName(), commit.Repo.Name, branch, commit.Id)
+	if err != nil {
+		return nil, err
+	}
+	if err := cc.renewer.Add(cc.APIClient.Ctx(), id); err != nil {
+		return nil, err
+	}
+	commit = client.NewCommit(commit.Repo.Project.GetName(), client.FileSetsRepoName, "", id)
+	cc.put(key, commit)
+	return cc.APIClient.GetFileTAR(commit, path)
+}
+
+func (cc *CacheClient) get(key string) (*pfs.Commit, bool) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	c, ok := cc.cache.Get(key)
+	if !ok {
+		return nil, ok
+	}
+	return c, ok
+}
+
+func (cc *CacheClient) put(key string, commit *pfs.Commit) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.cache.Add(key, commit)
+}
+
+func (cc *CacheClient) WithCreateFileSetClient(cb func(client.ModifyFile) error) (*pfs.CreateFileSetResponse, error) {
+	resp, err := cc.APIClient.WithCreateFileSetClient(func(mf client.ModifyFile) error {
+		ccfsc := &cacheCreateFileSetClient{
+			ModifyFile:  mf,
+			CacheClient: cc,
+		}
+		return cb(ccfsc)
+	})
+	return resp, errors.EnsureStack(err)
+}
+
+type cacheCreateFileSetClient struct {
+	client.ModifyFile
+	*CacheClient
+}
+
+func (ccfsc *cacheCreateFileSetClient) CopyFile(dst string, src *pfs.File, opts ...client.CopyFileOption) error {
+	newSrc := &pfs.File{
+		Path:  src.Path,
+		Datum: src.Datum,
+	}
+	key := pfsdb.CommitKey(src.Commit)
+	if c, ok := ccfsc.get(key); ok {
+		newSrc.Commit = c
+		return errors.EnsureStack(ccfsc.ModifyFile.CopyFile(dst, newSrc, opts...))
+	}
+	id, err := ccfsc.APIClient.GetFileSet(src.Commit.Repo.Project.GetName(), src.Commit.Repo.Name, "", src.Commit.Id)
+	if err != nil {
+		return err
+	}
+	if err := ccfsc.CacheClient.renewer.Add(ccfsc.APIClient.Ctx(), id); err != nil {
+		return err
+	}
+	newSrc.Commit = client.NewCommit(src.Commit.Repo.Project.GetName(), client.FileSetsRepoName, "", id)
+	ccfsc.put(key, newSrc.Commit)
+	return errors.EnsureStack(ccfsc.ModifyFile.CopyFile(dst, newSrc, opts...))
+}

@@ -1,0 +1,63 @@
+// Package keycache needs to be documented.
+//
+// TODO: document
+package keycache
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/laityjet/mammoth/v0/internal/backoff"
+	col "github.com/laityjet/mammoth/v0/internal/collection"
+	"github.com/laityjet/mammoth/v0/internal/errors"
+	"github.com/laityjet/mammoth/v0/internal/watch"
+)
+
+// Cache watches a key in etcd and caches the value in an atomic value
+// This is useful for frequently read but infrequently updated values
+type Cache struct {
+	readOnly     col.ReadOnlyCollection
+	defaultValue proto.Message
+	key          string
+	value        *atomic.Value
+}
+
+// NewCache returns a cache for the given key in the etcd collection
+func NewCache(readOnly col.ReadOnlyCollection, key string, defaultValue proto.Message) *Cache {
+	value := &atomic.Value{}
+	value.Store(defaultValue)
+	return &Cache{
+		readOnly:     readOnly,
+		value:        value,
+		key:          key,
+		defaultValue: defaultValue,
+	}
+}
+
+// Watch should be called in a goroutine to start the watcher
+func (c *Cache) Watch(ctx context.Context) {
+	backoff.RetryNotify(func() error {
+		err := c.readOnly.WatchOneF(ctx, c.key, func(ev *watch.Event) error {
+			switch ev.Type {
+			case watch.EventPut:
+				val := proto.Clone(c.defaultValue)
+				if err := proto.Unmarshal(ev.Value, val); err != nil {
+					return errors.EnsureStack(err)
+				}
+				c.value.Store(val)
+			case watch.EventDelete:
+				c.value.Store(c.defaultValue)
+			}
+			return nil
+		})
+		return errors.EnsureStack(err)
+	}, backoff.NewInfiniteBackOff(), backoff.NotifyCtx(ctx, fmt.Sprintf("watcher for %v", c.key))) //nolint:errcheck
+}
+
+// Load retrieves the current cached value
+func (c *Cache) Load() interface{} {
+	return proto.Clone(c.value.Load().(proto.Message))
+}

@@ -1,4 +1,4 @@
-module github.com/pachyderm/pachyderm/v2
+module github.com/laityjet/mammoth/v0
 
 go 1.23.1
 

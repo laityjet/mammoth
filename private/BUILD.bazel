@@ -1,4 +1,0 @@
-exports_files([
-    "repositories.bzl",
-    "extensions.bzl",
-])
